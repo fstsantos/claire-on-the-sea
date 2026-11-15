@@ -1,0 +1,111 @@
+extends Node3D
+## Claire: malha esculpida por código (tools/bake_claire.gd) presa ao esqueleto
+## da Universal Animation Library do Quaternius (CC0), que traz as animações de
+## parada, andar, correr, pular e nadar.
+## A frente deste nó é o -Z (o esqueleto original olha para +Z e é girado aqui).
+
+signal stepped
+
+const RigScene := preload("res://player/claire/ual.glb")
+const ClaireMesh := preload("res://player/claire/claire_mesh.res")
+const ClaireSkin := preload("res://player/claire/claire_skin.res")
+
+## O esqueleto original tem proporção de adulto (1,83 m); a Claire fica com ~1,4 m.
+const MODEL_SCALE := 0.72
+## Altura do ponto em torno do qual o corpo inclina ao mergulhar e subir.
+const PIVOT_HEIGHT := 0.75
+
+var _pivot: Node3D
+var _skeleton: Skeleton3D
+var _anim: AnimationPlayer
+var _current := ""
+var _last_cycle := 0.0
+
+
+func _ready() -> void:
+	_pivot = Node3D.new()
+	_pivot.position.y = PIVOT_HEIGHT
+	add_child(_pivot)
+
+	var rig: Node3D = RigScene.instantiate()
+	rig.rotation.y = PI
+	rig.scale = Vector3.ONE * MODEL_SCALE
+	rig.position.y = -PIVOT_HEIGHT
+	_pivot.add_child(rig)
+
+	_skeleton = rig.find_child("Skeleton3D", true, false)
+	_anim = rig.find_child("AnimationPlayer", true, false)
+	var mannequin := rig.find_child("Mannequin", true, false)
+	if mannequin:
+		mannequin.queue_free()
+
+	var body := MeshInstance3D.new()
+	body.name = "Claire"
+	body.mesh = ClaireMesh
+	body.skin = ClaireSkin
+	_skeleton.add_child(body)
+	body.skeleton = body.get_path_to(_skeleton)
+
+	_add_love_label()
+	_play("Idle", 1.0)
+
+
+## "love" no peito, preso ao osso do tórax para acompanhar as animações.
+func _add_love_label() -> void:
+	var attach := BoneAttachment3D.new()
+	attach.bone_name = "DEF-spine.003"
+	_skeleton.add_child(attach)
+	var label := Label3D.new()
+	label.text = "love"
+	var font := SystemFont.new()
+	font.font_names = PackedStringArray(["Segoe Script", "Brush Script MT", "Comic Sans MS", "cursive"])
+	font.font_italic = true
+	font.font_weight = 700
+	label.font = font
+	label.font_size = 64
+	label.pixel_size = 0.0012
+	label.outline_size = 0
+	label.modulate = Color(1, 1, 1)
+	label.shaded = true
+	label.double_sided = false
+	label.position = Vector3(0.0, -0.03, 0.128)
+	attach.add_child(label)
+
+
+func _play(anim_name: String, speed: float) -> void:
+	if _current != anim_name:
+		_current = anim_name
+		_anim.play(anim_name, 0.2)
+		_last_cycle = 0.0
+	_anim.speed_scale = speed
+
+
+## speed: velocidade horizontal em m/s. vertical_speed: usada no pulo e no mergulho.
+func animate(delta: float, speed: float, on_floor: bool, swimming: bool, vertical_speed: float) -> void:
+	var k := 1.0 - exp(-7.0 * delta)
+	var pitch := 0.0
+	if swimming:
+		if speed > 0.6:
+			_play("Swim_Fwd", clampf(speed / 2.6, 0.8, 1.9))
+		else:
+			_play("Swim_Idle", 1.0)
+		# inclina o corpo ao mergulhar (para baixo) e ao subir
+		pitch = clampf(vertical_speed * 0.2, -0.6, 0.6)
+	elif not on_floor:
+		_play("Jump", 1.0)
+	elif speed < 0.5:
+		_play("Idle", 1.0)
+	elif speed < 2.6:
+		_play("Walk", clampf(speed / 1.3, 0.7, 2.0))
+	elif speed < 6.8:
+		_play("Jog_Fwd", clampf(speed / 3.3, 0.8, 1.8))
+	else:
+		_play("Sprint", clampf(speed / 6.5, 0.8, 1.5))
+	_pivot.rotation.x = lerp_angle(_pivot.rotation.x, pitch, k)
+
+	# um passo a cada meia volta da animação de andar ou correr
+	if on_floor and not swimming and _current in ["Walk", "Jog_Fwd", "Sprint"] and _anim.current_animation_length > 0.0:
+		var cycle := _anim.current_animation_position / _anim.current_animation_length
+		if floorf(cycle * 2.0) != floorf(_last_cycle * 2.0):
+			stepped.emit()
+		_last_cycle = cycle
