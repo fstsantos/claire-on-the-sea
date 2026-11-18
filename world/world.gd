@@ -7,6 +7,8 @@ const Props := preload("res://world/props.gd")
 const ShellScript := preload("res://world/shell.gd")
 const Wildlife := preload("res://world/wildlife.gd")
 const Sharks := preload("res://world/sharks.gd")
+const Hut := preload("res://world/hut.gd")
+const MermaidHouse := preload("res://world/mermaid_house.gd")
 const AudioGen := preload("res://world/audio_gen.gd")
 const Hud := preload("res://ui/hud.gd")
 const Console := preload("res://ui/console.gd")
@@ -16,7 +18,7 @@ const SkyShader := preload("res://world/sky.gdshader")
 const GrassShader := preload("res://world/grass.gdshader")
 
 ## Raio a partir do qual a correnteza devolve a Claire para a ilha.
-const SEA_LIMIT := 215.0
+const SEA_LIMIT := 305.0
 const TIDE_BASE := 0.07
 const TIDE_RANGE := 0.07
 
@@ -30,6 +32,7 @@ var sharks: Node3D
 var wildlife: Node3D
 var sun: DirectionalLight3D
 var console: CanvasLayer
+var mermaid: Node3D
 ## Contagem do cenário fixo (palmeiras, pedras...), mostrada no /status.
 var counts := {}
 ## Lugares com nome para o /tp.
@@ -43,6 +46,8 @@ var shells_found := 0
 
 var _rng := RandomNumberGenerator.new()
 var _used: Array[Vector3] = []
+## Áreas sem vegetação nem pedras: (x, z, raio).
+var _clear_zones: Array[Vector3] = []
 var _shell_spots: Array[Vector3] = []
 var _solids: StaticBody3D
 var _time := 0.0
@@ -51,6 +56,7 @@ var _limit_warned := 0.0
 var _ocean: AudioStreamPlayer
 var _chime: AudioStreamPlayer
 var _splash_sound: AudioStreamPlayer
+var _song: AudioStreamPlayer
 var _step: AudioStreamPlayer
 var _splash: CPUParticles3D
 var _wake: CPUParticles3D
@@ -78,6 +84,8 @@ func _ready() -> void:
 		"centro": Vector3(0.0, terrain.height(0.0, 0.0), 0.0),
 	}
 	counts["Píer"] = 1
+	_build_hut()
+	_build_mermaid_house(pier_start)
 	counts["Guarda-sol"] = 1
 	_build_umbrella(spawn)
 	_build_palms()
@@ -105,6 +113,9 @@ func _ready() -> void:
 	player.get_node("Model").rotation.y = PI
 	player.splashed.connect(_on_splash)
 	player.get_node("Model").stepped.connect(_on_step)
+
+	mermaid.player = player
+	mermaid.found.connect(_on_mermaid_found)
 
 	console = Console.new()
 	console.world = self
@@ -248,6 +259,59 @@ func _build_pier(angle: float) -> Vector3:
 	return start + dir * (length - 1.5) + Vector3(0, deck_y - start.y, 0)
 
 
+## Cabana de madeira e folhas perto do meio da ilha, no trecho mais plano.
+func _build_hut() -> void:
+	var hut := Hut.new()
+	var x := -14.0
+	var z := -13.0
+	var body := hut.build(terrain, x, z)
+	add_child(body)
+	var door := hut.entrance()
+	places["casa"] = door
+	counts["Cabana"] = 1
+	_clear_zones.append(Vector3(x, z + 0.8, 6.8))
+	_clear_zones.append(Vector3(door.x, door.z - 1.5, 3.0))
+
+
+## Mansão da sereia: bem longe da ilha (245–285 m do centro), no fundo do mar, num lugar diferente a cada partida.
+func _build_mermaid_house(pier_end: Vector3) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var p := Vector3.INF
+	for attempt in 600:
+		var a := rng.randf() * TAU
+		var r := rng.randf_range(245.0, 285.0)
+		var x := cos(a) * r
+		var z := sin(a) * r
+		var h: float = terrain.height(x, z)
+		var deep := -20.0 if attempt < 400 else -14.0
+		if h > deep:
+			continue
+		if Vector2(x, z).distance_to(Terrain.ISLET_POS) < 45.0:
+			continue
+		if Vector2(x, z).distance_to(Vector2(pier_end.x, pier_end.z)) < 35.0:
+			continue
+		p = Vector3(x, h, z)
+		break
+	if not p.is_finite():
+		p = Vector3(0.0, terrain.height(0.0, -265.0), -265.0)
+	# Porta virada para a ilha.
+	var yaw := atan2(-p.x, -p.z)
+	var house := MermaidHouse.new()
+	var node := house.build(terrain, p, yaw, water.position.y, rng.randi())
+	add_child(node)
+	mermaid = house.mermaid
+	places["sereia"] = mermaid.global_position + Basis(Vector3.UP, yaw) * Vector3(0.0, 0.0, 4.0)
+	_clear_zones.append(Vector3(p.x, p.z, 24.0))
+
+
+func _in_clear_zone(x: float, z: float) -> bool:
+	for c in _clear_zones:
+		if Vector2(x - c.x, z - c.y).length() < c.z:
+			return true
+	return false
+
+
 func _build_umbrella(spawn: Vector3) -> void:
 	var u := Props.umbrella()
 	var p := spawn + Vector3(-4.0, 0.0, -3.0)
@@ -265,7 +329,7 @@ func _spot(min_h: float, max_h: float, spacing: float, max_r := 190.0, center :=
 		var x := center.x + cos(a) * r
 		var z := center.y + sin(a) * r
 		var h: float = terrain.height(x, z)
-		if h < min_h or h > max_h:
+		if h < min_h or h > max_h or _in_clear_zone(x, z):
 			continue
 		var ok := true
 		for q in _used:
@@ -412,7 +476,7 @@ func _build_grass() -> void:
 			var x := center.x + cos(a) * r
 			var z := center.y + sin(a) * r
 			var h: float = terrain.height(x, z)
-			if h < 1.1:
+			if h < 1.1 or _in_clear_zone(x, z):
 				continue
 			var chance := 0.015 + 0.985 * smoothstep(1.8, 2.9, h)
 			if _rng.randf() > chance:
@@ -472,6 +536,10 @@ func _build_audio() -> void:
 	_splash_sound.stream = AudioGen.splash()
 	_splash_sound.volume_db = -4.0
 	add_child(_splash_sound)
+	_song = AudioStreamPlayer.new()
+	_song.stream = AudioGen.mermaid_song()
+	_song.volume_db = -2.0
+	add_child(_song)
 	_step = AudioStreamPlayer.new()
 	_step.stream = AudioGen.step()
 	_step.volume_db = -16.0
@@ -625,6 +693,11 @@ func _on_shell_collected(_shell: Area3D) -> void:
 		hud.show_message("Você encontrou todas as conchas! A ilha é toda sua.", 10.0)
 	elif shells_found == 1:
 		hud.show_message("Primeira concha! Siga os fachos de luz para achar as outras.", 5.0)
+
+
+func _on_mermaid_found() -> void:
+	_song.play()
+	hud.show_big("Você encontrou a sereia!!!", 8.0)
 
 
 func _on_step() -> void:

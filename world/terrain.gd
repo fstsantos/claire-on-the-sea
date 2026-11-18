@@ -3,12 +3,13 @@ extends StaticBody3D
 ## A mesma função height() é usada pela malha, pela colisão, pela água
 ## (via textura de alturas) e para espalhar os objetos.
 
-const SIZE := 480.0
-const CELLS := 240
+const SIZE := 640.0
+const CELLS := 320
 const ISLAND_RADIUS := 85.0
 const ISLET_POS := Vector2(150.0, 40.0)
 const ISLET_RADIUS := 17.0
 const SEA_DEPTH := 13.0
+const DEEP_DROP := 12.0
 
 var height_texture: ImageTexture
 
@@ -46,6 +47,8 @@ func height(x: float, z: float) -> float:
 		h += d * (0.12 + 0.5 * hills) * smoothstep(0.0, 6.0, b)
 		return h
 	var s := -SEA_DEPTH * (1.0 - exp(-t * 0.09 / SEA_DEPTH))
+	# Mar aberto: depois de uns 200 m do centro o fundo desce para ~25 m.
+	s -= DEEP_DROP * smoothstep(105.0, 160.0, t)
 	return s + d * 0.3 * smoothstep(4.0, 20.0, t)
 
 

@@ -1,5 +1,5 @@
 extends CanvasLayer
-## Console do jogo: abre com a tecla ~ (a que fica abaixo do Esc) ou F1.
+## Console do jogo: abre com a tecla ' (no ABNT2, a que fica abaixo do Esc) ou F1; fecha com Esc.
 ## Os comandos podem ser digitados com ou sem a barra: "/status" ou "status".
 
 const Terrain := preload("res://world/terrain.gd")
@@ -20,6 +20,7 @@ var _cmds := {}
 var _order: Array[String] = []
 var _history: Array[String] = []
 var _hist_pos := 0
+var _strip_dead := false
 var _prev_mouse := Input.MOUSE_MODE_VISIBLE
 var _rng := RandomNumberGenerator.new()
 
@@ -80,12 +81,18 @@ func _build_ui() -> void:
 	_in.add_theme_font_size_override("font_size", 18)
 	_in.set("keep_editing_on_text_submit", true)
 	_in.text_submitted.connect(_on_submit)
+	_in.text_changed.connect(_on_text_changed)
 	col.add_child(_in)
 
 
 func _is_toggle(e: InputEventKey) -> bool:
-	return e.physical_keycode == KEY_QUOTELEFT or e.keycode == KEY_QUOTELEFT \
-		or e.keycode == KEY_ASCIITILDE or e.unicode == 96 or e.unicode == 126 or e.keycode == KEY_F1
+	# ' (no ABNT2, a tecla abaixo do Esc) ou F1 abrem e fecham; Esc também fecha
+	# (tratado em _input). O ~ não é usado: no ABNT2 é tecla morta e
+	# bagunçava a digitação.
+	if e.keycode == KEY_F1:
+		return true
+	return e.unicode == 39 or e.keycode == KEY_APOSTROPHE \
+		or (e.unicode == 0 and e.physical_keycode == KEY_QUOTELEFT)
 
 
 func _input(event: InputEvent) -> void:
@@ -131,7 +138,19 @@ func toggle() -> void:
 		Input.mouse_mode = _prev_mouse
 
 
+## Remove o ' que a tecla usada para abrir pode deixar no começo da linha.
+func _on_text_changed(text: String) -> void:
+	if not _strip_dead:
+		return
+	_strip_dead = false
+	var clean := text.lstrip("'")
+	if clean != text:
+		_in.text = clean
+		_in.caret_column = clean.length()
+
+
 func _focus() -> void:
+	_strip_dead = true
 	_in.clear()
 	_in.grab_focus()
 	if _in.has_method("edit"):
@@ -206,7 +225,7 @@ func _reg(names: Array, fn: Callable, usage: String, about: String) -> void:
 func _register() -> void:
 	_reg(["ajuda", "help", "?"], _cmd_help, "/ajuda", "lista os comandos")
 	_reg(["status"], _cmd_status, "/status [mundo|claire|conchas|tubaroes|bichos|cenario]", "detalhe de todas as entidades do mundo")
-	_reg(["tp"], _cmd_tp, "/tp <x> <z> | <x> <y> <z> | concha [n] | tubarao [espécie] | inicio | pier | ilhota | centro", "teleporta a Claire")
+	_reg(["tp"], _cmd_tp, "/tp <x> <z> | <x> <y> <z> | concha [n] | tubarao [espécie] | inicio | pier | ilhota | centro | casa", "teleporta a Claire")
 	_reg(["criar", "spawn"], _cmd_spawn, "/criar tubarao <espécie> [n] | concha [n] | gaivota [n] | cardume [n]", "cria entidades perto da Claire")
 	_reg(["remover", "remove"], _cmd_remove, "/remover tubaroes [espécie] | conchas | gaivotas | peixes | tudo", "tira entidades do mundo")
 	_reg(["coletar"], _cmd_collect, "/coletar [n | todas]", "coleta a concha mais próxima, a de número n ou todas")
@@ -266,7 +285,7 @@ func _cmd_help(_a: Array[String]) -> void:
 	_title("COMANDOS")
 	for name in _order:
 		_print("[color=%s]%s[/color]\n    [color=%s]%s[/color]" % [C_CMD, _cmds[name].usage, C_DIM, _cmds[name].about])
-	_print("[color=%s]~ ou F1 abre/fecha · ↑↓ histórico · Tab completa · PageUp/PageDown rola[/color]" % C_DIM)
+	_print("[color=%s]' ou F1 abre/fecha · Esc fecha ·↑↓ histórico · Tab completa · PageUp/PageDown rola[/color]" % C_DIM)
 
 
 func _cmd_clear(_a: Array[String]) -> void:
@@ -451,8 +470,8 @@ func _cmd_tp(a: Array[String]) -> void:
 	else:
 		_usage("tp")
 		return
-	dest.x = clampf(dest.x, -230.0, 230.0)
-	dest.z = clampf(dest.z, -230.0, 230.0)
+	dest.x = clampf(dest.x, -310.0, 310.0)
+	dest.z = clampf(dest.z, -310.0, 310.0)
 	dest.y = maxf(dest.y, world.ground_height(dest)) + 0.25
 	world.player.global_position = dest
 	world.player.velocity = Vector3.ZERO
